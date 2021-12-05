@@ -1,9 +1,11 @@
+#include <Arduino.h>
 
 #include <Adafruit_NeoPixel.h>
 #include <WiFi.h>
 #include "time.h"
-//TODO figure out how to install this thing
-//#include <sunset.h>
+//#include <TimeLib.h>
+#include <Arduino_JSON.h>
+#include <HTTPClient.h>
 
 
 #define LED_PIN     0
@@ -13,17 +15,33 @@
 // NeoPixel brightness, 0 (min) to 255 (max)
 #define BRIGHTNESS 80 // Set BRIGHTNESS to about 1/5 (max = 255)
 
+//timing for normal sleep
 #define uS_TO_S_FACTOR 1000000UL  /* Conversion factor for micro seconds to seconds */
 #define TIME_TO_SLEEP  120        /* Time ESP32 will go to sleep (in seconds) */
 
+//Location info for sunset
+String openWeatherMapApiKey = "";
+String LATITUDE = "40.3093";
+String LONGITUDE = "-112.0120";
+String jsonBuffer;
+
+//HolidayApi
+String host_headers_key = "x-rapidapi-host";
+String host_headers_value = "public-holiday.p.rapidapi.com";
+String api_key_header_key = "x-rapidapi-key";
+String api_key_header_value ="";
+
+
+
 RTC_DATA_ATTR int bootCount = 0;
-const char* ssid       = "<>";
-const char* password   = "<>";
+const char* ssid       = "";
+const char* password   = "";
 
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 0;
 const int   daylightOffset_sec = 0;
 
+const int connection_count_limit = 20;
 
 uint32_t red;
 uint32_t white;
@@ -79,13 +97,11 @@ void setup() {
   
   delay(100);  
 
-  getCurrentTime();
+  determineTiming();
 
-  Serial.println("Time" + gettimeofday());
+//  Serial.println("Time" + gettimeofday());
 
-  
-
-  nightyNight(120, true);
+  nightyNight(30, true);
 }
 
 
@@ -144,28 +160,199 @@ void nightyNight(uint32_t sleep_length_seconds, bool lights_off){
 
 }
 
-void printLocalTime()
-{
+int getEpochCurrentTime(){
+  int epoch_time = 0;
+  int attempt_counter_limit = 20;
+  int attempt_counter = 0;
   struct tm timeinfo;
-  if(!getLocalTime(&timeinfo)){
-    Serial.println("Failed to obtain time");
-    return;
+  while(attempt_counter<attempt_counter_limit){
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    if(!getLocalTime(&timeinfo)){
+      Serial.println("Failed to obtain time");    
+    }
+    else{
+      epoch_time = mktime(&timeinfo);
+      return epoch_time;
+      break;
+      }
   }
-  Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-}
+  return epoch_time;
+  }
 
-void getCurrentTime(){
+void determineTiming(){
   Serial.printf("Connecting to %s ", ssid);
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
+ 
+  int connection_counter = 0;
+  while ((WiFi.status() != WL_CONNECTED) or connection_counter==connection_count_limit) {
+      connection_counter++;
       delay(500);
       Serial.print(".");
   }
-  Serial.println(" CONNECTED");
+  if(connection_counter==connection_count_limit){
+    Serial.println("Unable to Connect after"+connection_count_limit);
+  }
+  else{
+    Serial.println(" CONNECTED");
+    delay(500);
+    
+    int epoch_current_time = getEpochCurrentTime();
+    Serial.println("Epoch Current time is");
+    Serial.println(epoch_current_time);
+    
+    int sunset_time = getSunset();
+    Serial.println("Sunset time is");
+    Serial.println(sunset_time);
 
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  printLocalTime();
+    getHolidays();
+  }
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   
+}
+
+int getSunset(){
+  int sunset_time = 0;
+  if(WiFi.status()== WL_CONNECTED){
+      String serverPath = "http://api.openweathermap.org/data/2.5/weather?lat=" + LATITUDE + "&lon=" + LONGITUDE + "&APPID=" + openWeatherMapApiKey + "&units=imperial";
+      String jsonBuffer = httpGETRequest(serverPath.c_str());
+      Serial.println(jsonBuffer);
+      JSONVar myObject = JSON.parse(jsonBuffer);
+  
+      // JSON.typeof(jsonVar) can be used to get the type of the var
+      if (JSON.typeof(myObject) == "undefined") {
+        Serial.println("Sunset Data Parsing input failed!");
+        return sunset_time;
+      }
+      sunset_time = myObject["sys"]["sunset"];
+    }
+    else {
+      Serial.println("WiFi Disconnected");
+    }
+  return sunset_time;
+}
+
+
+
+  
+JSONVar getHolidays(){
+  Serial.println("I am over here dammit");
+  JSONVar holidays = null;
+  String year = "2021";
+  struct tm timeinfo;
+  if(!getLocalTime(&timeinfo)){
+      Serial.println("Failed to obtain time");    
+    }
+    else{
+      Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+      year = timeinfo.tm_year + 1900;
+      
+      Serial.println(year);
+    }
+
+    
+  if(WiFi.status()== WL_CONNECTED){
+    String serverPath = "https://public-holiday.p.rapidapi.com/"+year+"/US";
+    String jsonBuffer = httpGETRequestWithHeaders(serverPath.c_str(),host_headers_key, host_headers_value, api_key_header_key, api_key_header_value);
+    JSONVar myObject = JSON.parse(jsonBuffer);
+
+    // JSON.typeof(jsonVar) can be used to get the type of the var
+      if (JSON.typeof(myObject) == "undefined") {
+         Serial.println("Holiday Parsing input failed!");
+         
+      }
+      holidays = myObject;
+      Serial.println(myObject);
+  }
+  else {
+        Serial.println("WiFi Disconnected");
+  }
+  return holidays;
+}
+
+void printTime(){
+  struct tm timeinfo;
+  if(!getLocalTime(&timeinfo)){
+      Serial.println("Failed to obtain time");    
+    }
+    else{
+      Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+    }
+  
+  }
+
+String httpGETRequestWithHeaders(const char* serverName, String header_1_key, String header_1_value, String header_2_key, String header_2_value) {
+  WiFiClient client;
+  HTTPClient http;
+  int httpResponseCode = 0;
+  String payload = "{}"; 
+  int attempt_counter_limit = 20;
+  int attempt_counter = 0;
+    
+  // Your Domain name with URL path or IP address with path
+  http.begin(client, serverName);
+  http.addHeader(header_1_value,header_1_value);
+  http.addHeader(header_2_value,header_2_value);
+
+  while(attempt_counter<attempt_counter_limit){
+    attempt_counter++;
+    httpResponseCode = http.GET();
+    if (httpResponseCode=200) {
+//      #TODO I am getting 200s but am not getting the data right. 
+      Serial.print("HTTP Response code: ");
+      Serial.println(httpResponseCode);
+      payload = http.getString();
+      Serial.println(payload);
+      break;
+    }
+    if (httpResponseCode>0) {
+      Serial.print("HTTP Response code: ");
+      Serial.println(httpResponseCode);
+    }
+    else {
+      Serial.print("Error code: ");
+      Serial.println(httpResponseCode);
+    }
+    delay(500);
+    // Free resources
+    http.end();
+  }
+
+ return payload;
+}
+
+String httpGETRequest(String serverName) {
+  WiFiClient client;
+  HTTPClient http;
+  int httpResponseCode = 0;
+  String payload = "{}"; 
+  int attempt_counter_limit = 20;
+  int attempt_counter = 0;
+    
+  // Your Domain name with URL path or IP address with path
+  http.begin(client, serverName);
+
+  while(attempt_counter<attempt_counter_limit){
+    attempt_counter++;
+    httpResponseCode = http.GET();
+    if (httpResponseCode=200) {
+      Serial.print("HTTP Response code: ");
+      Serial.println(httpResponseCode);
+      payload = http.getString();
+      break;
+    }
+    if (httpResponseCode>0) {
+      Serial.print("HTTP Response code: ");
+      Serial.println(httpResponseCode);
+    }
+    else {
+      Serial.print("Error code: ");
+      Serial.println(httpResponseCode);
+    }
+    delay(500);
+    // Free resources
+    http.end();
+  }
+
+ return payload;
 }
