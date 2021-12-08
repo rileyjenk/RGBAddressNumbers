@@ -16,7 +16,7 @@
 #define BRIGHTNESS 80 // Set BRIGHTNESS to about 1/5 (max = 255)
 
 //timing for normal sleep
-#define uS_TO_S_FACTOR 1000000UL  /* Conversion factor for micro seconds to seconds */
+#define uS_TO_S_FACTOR 1000000LL  /* Conversion factor for micro seconds to seconds */
 #define TIME_TO_SLEEP  120        /* Time ESP32 will go to sleep (in seconds) */
 
 //Location info for sunset
@@ -30,8 +30,6 @@ String host_headers_key = "x-rapidapi-host";
 String host_headers_value = "public-holiday.p.rapidapi.com";
 String api_key_header_key = "x-rapidapi-key";
 String api_key_header_value ="";
-
-
 
 RTC_DATA_ATTR int bootCount = 0;
 const char* ssid       = "";
@@ -54,6 +52,11 @@ uint32_t yellow;
 uint32_t black;
 
 
+int wake_up_time = 3600;
+int light_on_duration_seconds = 7200;
+bool toggle = false;
+
+
 
 // Declare our NeoPixel strip object:
 Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -74,7 +77,7 @@ void setup() {
 
   
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
-  strip.show();            // Turn OFF all pixels ASAP
+//  strip.show();            // Turn OFF all pixels ASAP
   strip.setBrightness(BRIGHTNESS);
   red = strip.Color(255, 0, 0);
   white = strip.Color(255, 255, 255);
@@ -86,22 +89,27 @@ void setup() {
   yellow = strip.Color(255, 242, 0);
   black = strip.Color(0,0,0);
 
-  colorWipe(red, 50);
-  colorWipe(white, 50);
-  colorWipe(green, 50);
-  colorWipe(blue, 50);
-  colorWipe(domo_blue, 50);
-  colorWipe(purple, 50);
-  colorWipe(orange, 50);
-  colorWipe(yellow, 50);
+//  colorWipe(red, 50);
+//  colorWipe(white, 50);
+//  colorWipe(green, 50);
+//  colorWipe(blue, 50);
+//  colorWipe(domo_blue, 50);
+//  colorWipe(purple, 50);
+//  colorWipe(orange, 50);
+//  colorWipe(yellow, 50);
   
   delay(100);  
 
   determineTiming();
 
+  determineLightMode();
+
 //  Serial.println("Time" + gettimeofday());
 
-  nightyNight(30, true);
+  
+  nightyNight(wake_up_time, toggle);
+
+  
 }
 
 
@@ -115,6 +123,43 @@ void colorWipe(uint32_t color, int wait) {
     strip.setPixelColor(i, color);         //  Set pixel's color (in RAM)
     strip.show();                          //  Update strip to match
     delay(wait);                           //  Pause for a moment
+  }
+}
+
+void colorWipe2Colors(uint32_t color1,uint32_t color2, int wait) {
+  for(int i=0; i<strip.numPixels(); i++) { // For each pixel in strip...
+    if ( i % 2 == 0){
+      strip.setPixelColor(i, color1);
+    }
+
+    else{
+      strip.setPixelColor(i, color2);
+    }
+    strip.show();                          //  Update strip to match
+    delay(wait);                           //  Pause for a moment
+  }
+}
+
+void christmasWipe(uint32_t color1,uint32_t color2, int wait) {
+  for(int i=0; i<3; i++) { // For each pixel in strip...
+      strip.setPixelColor(i, color1);
+      strip.show();                          //  Update strip to match
+      delay(wait);  
+  }
+  for(int i=4; i<6; i++) { // For each pixel in strip...
+      strip.setPixelColor(i, color2);
+      strip.show();                          //  Update strip to match
+      delay(wait);  
+  }
+  for(int i=7; i<10; i++) { // For each pixel in strip...
+      strip.setPixelColor(i, color1);
+      strip.show();                          //  Update strip to match
+      delay(wait);  
+  }
+  for(int i=11; i<14; i++) { // For each pixel in strip...
+      strip.setPixelColor(i, color2);
+      strip.show();                          //  Update strip to match
+      delay(wait);  
   }
 }
 
@@ -147,11 +192,15 @@ void print_wakeup_reason(){
   }
 }
 
-void nightyNight(uint32_t sleep_length_seconds, bool lights_off){
+void nightyNight(uint32_t sleep_length_seconds, bool lights_on){
+  Serial.println("Sleep length seconds");
+  Serial.println(sleep_length_seconds);
+  Serial.println("What I passed to wakeup timer");
+  Serial.println(sleep_length_seconds * uS_TO_S_FACTOR);
   esp_sleep_enable_timer_wakeup(sleep_length_seconds * uS_TO_S_FACTOR);
   Serial.println("Setup ESP32 to sleep for every " + String(sleep_length_seconds/60) +" MINUTES");
   Serial.println("Going to sleep now");
-  if (lights_off){
+  if (lights_on==false){
     offWipe(200);
   }
   delay(1000);
@@ -179,6 +228,14 @@ int getEpochCurrentTime(){
   return epoch_time;
   }
 
+
+void determineLightMode(){
+  if(true and toggle){
+    Serial.println("Christmas Livghts Mode On");
+    christmasWipe(green,red, 100); 
+  }
+}
+
 void determineTiming(){
   Serial.printf("Connecting to %s ", ssid);
   WiFi.begin(ssid, password);
@@ -202,9 +259,35 @@ void determineTiming(){
     
     int sunset_time = getSunset();
     Serial.println("Sunset time is");
+    //testing make the sunset time way later
+//    sunset_time=sunset_time +23900;
     Serial.println(sunset_time);
+    int now_and_sunset_delta = epoch_current_time - sunset_time;
 
-    getHolidays();
+    Serial.println("delattime");
+    Serial.println(now_and_sunset_delta);
+//    getHolidays();
+    //TODO THIS doesn't work
+    if(now_and_sunset_delta < 0){
+      Serial.println("Condition 1, it is before sunset, delta set to sunset time");
+      wake_up_time = now_and_sunset_delta * -1;
+      toggle = false;
+      }
+    else if(now_and_sunset_delta >= 0  and now_and_sunset_delta < light_on_duration_seconds){
+      Serial.println("Condition 2, sunset has occurred, but only just, wake up time set to how long we want the lights to be one for");
+      wake_up_time = light_on_duration_seconds;
+      toggle = true;
+      }
+    else if(now_and_sunset_delta >= light_on_duration_seconds){
+      Serial.println("Condition 3, sunset has occurred, but it is now time to shut off the lights. Sleep a long time till we can get the next sunset time.");
+      wake_up_time = 21600;
+      toggle = false;
+      }
+    Serial.println("wake_up_time");
+    Serial.println(wake_up_time);
+    Serial.println("toggle");
+    Serial.println(toggle);
+    
   }
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
@@ -232,28 +315,27 @@ int getSunset(){
   return sunset_time;
 }
 
-
-
   
 JSONVar getHolidays(){
   Serial.println("I am over here dammit");
   JSONVar holidays = null;
-  String year = "2021";
+  int year_num = 0;
   struct tm timeinfo;
   if(!getLocalTime(&timeinfo)){
       Serial.println("Failed to obtain time");    
     }
     else{
       Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-      year = timeinfo.tm_year + 1900;
+      year_num = timeinfo.tm_year + 1900;
       
-      Serial.println(year);
+      Serial.println(year_num);
     }
-
     
   if(WiFi.status()== WL_CONNECTED){
-    String serverPath = "https://public-holiday.p.rapidapi.com/"+year+"/US";
+    String serverPath = "https://public-holiday.p.rapidapi.com/"+ String(year_num) +"/US";
+    Serial.println(serverPath);
     String jsonBuffer = httpGETRequestWithHeaders(serverPath.c_str(),host_headers_key, host_headers_value, api_key_header_key, api_key_header_value);
+    Serial.println(jsonBuffer);
     JSONVar myObject = JSON.parse(jsonBuffer);
 
     // JSON.typeof(jsonVar) can be used to get the type of the var
@@ -293,6 +375,7 @@ String httpGETRequestWithHeaders(const char* serverName, String header_1_key, St
   http.begin(client, serverName);
   http.addHeader(header_1_value,header_1_value);
   http.addHeader(header_2_value,header_2_value);
+  http.addHeader("CONTENT","application/json");
 
   while(attempt_counter<attempt_counter_limit){
     attempt_counter++;
@@ -302,6 +385,8 @@ String httpGETRequestWithHeaders(const char* serverName, String header_1_key, St
       Serial.print("HTTP Response code: ");
       Serial.println(httpResponseCode);
       payload = http.getString();
+      Serial.println("I got to the 200 code area");
+      Serial.println("Printing payload");
       Serial.println(payload);
       break;
     }
@@ -317,7 +402,6 @@ String httpGETRequestWithHeaders(const char* serverName, String header_1_key, St
     // Free resources
     http.end();
   }
-
  return payload;
 }
 
